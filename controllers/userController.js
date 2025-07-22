@@ -1,4 +1,4 @@
-const Sentence = require('../models/Sentence');
+const Sentence = require('../models/sentence');
 
 exports.getAssignedSentences = async (req, res) => {
   try {

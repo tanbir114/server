@@ -1,7 +1,7 @@
 const fs = require('fs');
 const csv = require('csv-parser');
 const User = require('../models/user');
-const Sentence = require('../models/Sentence');
+const Sentence = require('../models/sentence');
 
 exports.uploadCSV = async (req, res) => {
   try {
