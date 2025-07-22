@@ -36,6 +36,11 @@ app.use('/api/auth', authRoutes);
 app.use("/", (req, res) => {
     res.sendFile(path.resolve(__dirname, "public", "index.html"));
 });
+
+app.get("/check",(req,res) => {
+    res.status(200).json({ message: "Server is running" });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 // module.exports.handler = serverless(app);
