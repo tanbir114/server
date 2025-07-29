@@ -1,14 +1,22 @@
 const Sentence = require('../models/sentence');
+const mongoose = require('mongoose');
 
 exports.getAssignedSentences = async (req, res) => {
   try {
     const { userId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid userId' });
+    }
+
     const sentences = await Sentence.find({ assignedTo: userId })
-      .select('text index annotations')  // Using 'text' field
+      .select('text index annotations')
       .sort({ index: 1 });
+
     res.status(200).json(sentences);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Error in getAssignedSentences:', err);
+    res.status(500).json({ message: 'Server error fetching sentences' });
   }
 };
 
@@ -17,26 +25,46 @@ exports.annotateSentence = async (req, res) => {
     const { sentenceId } = req.params;
     const { userId, labels } = req.body;
 
-    if (!Array.isArray(labels) || labels.length === 0) {
+    // Validate input
+    if (!sentenceId || !mongoose.Types.ObjectId.isValid(sentenceId)) {
+      return res.status(400).json({ message: 'Invalid sentenceId' });
+    }
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: 'Invalid userId' });
+    }
+
+    if (!Array.isArray(labels)) {
       return res.status(400).json({ message: 'Labels must be a non-empty array' });
     }
 
+    // Fetch sentence
     const sentence = await Sentence.findById(sentenceId);
-    if (!sentence) return res.status(404).json({ message: 'Sentence not found' });
+    if (!sentence) {
+      return res.status(404).json({ message: 'Sentence not found' });
+    }
 
-    const existingAnnotation = sentence.annotations.find(
-      a => a.userId.toString() === userId
+    // Find existing annotation
+    const existingAnnotationIndex = sentence.annotations.findIndex(
+      (a) => a.userId.toString() === userId.toString()
     );
 
-    if (existingAnnotation) {
-      existingAnnotation.labels = labels;
+    if (existingAnnotationIndex !== -1) {
+      // Update existing annotation
+      sentence.annotations[existingAnnotationIndex].labels = labels;
     } else {
-      sentence.annotations.push({ userId, labels });
+      // Add new annotation
+      sentence.annotations.push({
+        userId: new mongoose.Types.ObjectId(userId),
+        labels,
+      });
     }
 
     await sentence.save();
-    res.status(200).json({ message: 'Annotation saved' });
+    res.status(200).json({ message: 'Annotation saved successfully' });
+
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Error in annotateSentence:', err);
+    res.status(500).json({ message: 'Server error saving annotation' });
   }
 };
