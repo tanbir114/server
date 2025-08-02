@@ -1,13 +1,13 @@
-const fs = require('fs');
-const csv = require('csv-parser');
-const User = require('../models/user');
-const Sentence = require('../models/sentence');
+const fs = require("fs");
+const csv = require("csv-parser");
+const User = require("../models/user");
+const Sentence = require("../models/sentence");
 
 exports.uploadCSV = async (req, res) => {
   let filePath;
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
+      return res.status(400).json({ message: "No file uploaded" });
     }
 
     filePath = req.file.path;
@@ -17,38 +17,21 @@ exports.uploadCSV = async (req, res) => {
     await new Promise((resolve, reject) => {
       fs.createReadStream(filePath)
         .pipe(csv())
-        .on('data', (row) => {
-          const sentenceText = row.sentence || row.text || Object.values(row)[0];
+        .on("data", (row) => {
+          const sentenceText =
+            row.sentence || row.text || Object.values(row)[0];
           if (sentenceText && String(sentenceText).trim().length > 0) {
             sentencesFromCSV.push({
-              text: String(sentenceText).trim()
+              text: String(sentenceText).trim(),
             });
           }
         })
-        .on('end', resolve)
-        .on('error', reject);
+        .on("end", resolve)
+        .on("error", reject);
     });
 
     if (sentencesFromCSV.length === 0) {
-      return res.status(400).json({ message: 'No valid rows found in CSV.' });
-    }
-
-    // Deduplicate by text against existing DB
-    const allTexts = sentencesFromCSV.map(s => s.text);
-    const existingSentences = await Sentence.find({ text: { $in: allTexts } })
-      .select('text')
-      .lean();
-
-    const existingSet = new Set(existingSentences.map(s => s.text));
-    const newTexts = sentencesFromCSV
-      .map(s => s.text)
-      .filter((t, i, arr) => arr.indexOf(t) === i) // in-file dedupe
-      .filter(t => !existingSet.has(t));           // DB dedupe
-
-    if (newTexts.length === 0) {
-      return res.status(200).json({
-        message: `CSV uploaded: 0 new sentences added, ${existingSet.size} duplicates skipped.`
-      });
+      return res.status(400).json({ message: "No valid rows found in CSV." });
     }
 
     // Get current max index and assign indices sequentially
@@ -57,23 +40,25 @@ exports.uploadCSV = async (req, res) => {
       .lean();
     let nextIndex = (maxIndexDoc?.index ?? -1) + 1;
 
-    const docsToInsert = newTexts.map(text => ({
-      text,
-      index: nextIndex++
+    const docsToInsert = sentencesFromCSV.map((s) => ({
+      text: s.text,
+      index: nextIndex++,
     }));
 
     await Sentence.insertMany(docsToInsert);
 
     return res.status(200).json({
-      message: `CSV uploaded: ${docsToInsert.length} new sentences added, ${existingSet.size} duplicates skipped.`
+      message: `CSV uploaded: ${docsToInsert.length} sentences inserted.`,
     });
   } catch (err) {
-    console.error('Upload CSV error:', err);
-    return res.status(500).json({ message: 'Server error during CSV upload' });
+    console.error("Upload CSV error:", err);
+    return res.status(500).json({ message: "Server error during CSV upload" });
   } finally {
     // best-effort cleanup
     if (filePath) {
-      try { fs.unlinkSync(filePath); } catch {}
+      try {
+        fs.unlinkSync(filePath);
+      } catch {}
     }
   }
 };
@@ -84,69 +69,79 @@ exports.getUserProgress = async (req, res) => {
 
     // Get total assigned from user's assignments
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     const totalAssigned = user.assignments.reduce((sum, assignment) => {
-      return sum + (assignment.batchSize || (assignment.batchEnd - assignment.batchStart + 1));
+      return (
+        sum +
+        (assignment.batchSize ||
+          assignment.batchEnd - assignment.batchStart + 1)
+      );
     }, 0);
 
     const annotated = await Sentence.countDocuments({
       assignedTo: userId,
-      annotations: { $elemMatch: { userId: userId } }
+      annotations: { $elemMatch: { userId: userId } },
     });
 
-    return res.status(200).json({ 
+    return res.status(200).json({
       totalAssigned,
       annotated,
-      progressPercentage: totalAssigned > 0 
-        ? Math.round((annotated / totalAssigned) * 100) 
-        : 0
+      progressPercentage:
+        totalAssigned > 0 ? Math.round((annotated / totalAssigned) * 100) : 0,
     });
   } catch (err) {
-    console.error('getUserProgress error:', err);
+    console.error("getUserProgress error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
 exports.fetchUsers = async (req, res) => {
   try {
-    const users = await User.find({ role: 'user' }, 'name email _id');
+    const users = await User.find({ role: "user" }, "name email _id");
     return res.json(users);
   } catch (err) {
-    console.error('Error fetching users:', err);
-    return res.status(500).json({ message: 'Failed to fetch users' });
+    console.error("Error fetching users:", err);
+    return res.status(500).json({ message: "Failed to fetch users" });
   }
 };
 
 exports.getAllAssignments = async (req, res) => {
   try {
     // First get all users
-    const users = await User.find({ role: 'user' }).lean();
-    
+    const users = await User.find({ role: "user" }).lean();
+
     // Then get assignment stats for each user
-    const assignments = await Promise.all(users.map(async (user) => {
-      // Calculate total assigned from batch assignments
-      const totalAssigned = user.assignments.reduce((sum, assignment) => {
-        return sum + (assignment.batchSize || (assignment.batchEnd - assignment.batchStart + 1));
-      }, 0);
+    const assignments = await Promise.all(
+      users.map(async (user) => {
+        // Calculate total assigned from batch assignments
+        const totalAssigned = user.assignments.reduce((sum, assignment) => {
+          return (
+            sum +
+            (assignment.batchSize ||
+              assignment.batchEnd - assignment.batchStart + 1)
+          );
+        }, 0);
 
-      // Count how many sentences this user has annotated
-      const annotated = await Sentence.countDocuments({
-        assignedTo: user._id,
-        'annotations.userId': user._id
-      });
+        // Count how many sentences this user has annotated
+        const annotated = await Sentence.countDocuments({
+          assignedTo: user._id,
+          "annotations.userId": user._id,
+        });
 
-      return {
-        userId: user._id,
-        userName: user.name,
-        userEmail: user.email,
-        totalAssigned,
-        annotated,
-        progressPercentage: totalAssigned > 0 
-          ? Math.round((annotated / totalAssigned) * 100)
-          : 0
-      };
-    }));
+        return {
+          userId: user._id,
+          userName: user.name,
+          userEmail: user.email,
+          totalAssigned,
+          annotated,
+          progressPercentage:
+            totalAssigned > 0
+              ? Math.round((annotated / totalAssigned) * 100)
+              : 0,
+        };
+      })
+    );
 
     // Sort by name
     assignments.sort((a, b) => a.userName.localeCompare(b.userName));
@@ -163,27 +158,30 @@ exports.getUserProgress = async (req, res) => {
     const { userId } = req.params;
 
     const user = await User.findById(userId).lean();
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     // Calculate total assigned from batch assignments
     const totalAssigned = user.assignments.reduce((sum, assignment) => {
-      return sum + (assignment.batchSize || (assignment.batchEnd - assignment.batchStart + 1));
+      return (
+        sum +
+        (assignment.batchSize ||
+          assignment.batchEnd - assignment.batchStart + 1)
+      );
     }, 0);
 
     const annotated = await Sentence.countDocuments({
       assignedTo: userId,
-      'annotations.userId': userId
+      "annotations.userId": userId,
     });
 
-    return res.status(200).json({ 
+    return res.status(200).json({
       totalAssigned,
       annotated,
-      progressPercentage: totalAssigned > 0 
-        ? Math.round((annotated / totalAssigned) * 100)
-        : 0
+      progressPercentage:
+        totalAssigned > 0 ? Math.round((annotated / totalAssigned) * 100) : 0,
     });
   } catch (err) {
-    console.error('getUserProgress error:', err);
+    console.error("getUserProgress error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
@@ -193,45 +191,54 @@ exports.getUserAssignments = async (req, res) => {
     const { userId } = req.params;
 
     const [user, sentences] = await Promise.all([
-      User.findById(userId).select('name email assignments').lean(),
+      User.findById(userId).select("name email assignments").lean(),
       Sentence.find({ assignedTo: userId })
-        .select('text index annotations')
+        .select("text index annotations")
         .sort({ index: 1 })
-        .lean()
+        .lean(),
     ]);
 
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: "User not found" });
     }
 
     // Calculate total assigned from batch assignments
     const totalAssigned = user.assignments.reduce((sum, assignment) => {
-      return sum + (assignment.batchSize || (assignment.batchEnd - assignment.batchStart + 1));
+      return (
+        sum +
+        (assignment.batchSize ||
+          assignment.batchEnd - assignment.batchStart + 1)
+      );
     }, 0);
 
-    const annotated = sentences.filter(s =>
-      (s.annotations || []).some(a => String(a.userId) === String(userId)
-    ).length);
+    const annotated = sentences.filter(
+      (s) =>
+        (s.annotations || []).some((a) => String(a.userId) === String(userId))
+          .length
+    );
 
-    const progressPercentage = totalAssigned > 0
-      ? Math.round((annotated / totalAssigned) * 100)
-      : 0;
+    const progressPercentage =
+      totalAssigned > 0 ? Math.round((annotated / totalAssigned) * 100) : 0;
 
     return res.status(200).json({
       user,
       totalAssigned,
       annotated,
       progressPercentage,
-      assignments: sentences.map(a => ({
+      assignments: sentences.map((a) => ({
         id: a._id,
         text: a.text,
         index: a.index,
-        isAnnotated: (a.annotations || []).some(x => String(x.userId) === String(userId))
-      }))
+        isAnnotated: (a.annotations || []).some(
+          (x) => String(x.userId) === String(userId)
+        ),
+      })),
     });
   } catch (err) {
-    console.error('Error fetching user assignments:', err);
-    return res.status(500).json({ message: 'Failed to fetch user assignments' });
+    console.error("Error fetching user assignments:", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to fetch user assignments" });
   }
 };
 
@@ -239,117 +246,138 @@ exports.assignDataToUser = async (req, res) => {
   try {
     let { userId, startIndex, batchSize = 500 } = req.body;
 
-    // validate
+    // Validate input
     if (!userId || startIndex === undefined) {
-      return res.status(400).json({ message: 'Missing userId or startIndex' });
+      return res.status(400).json({ message: "Missing userId or startIndex" });
     }
 
     startIndex = Number(startIndex);
     batchSize = Number(batchSize);
 
     if (!Number.isInteger(startIndex) || startIndex < 0) {
-      return res.status(400).json({ message: 'startIndex must be a non-negative integer' });
+      return res
+        .status(400)
+        .json({ message: "startIndex must be a non-negative integer" });
     }
     if (!Number.isInteger(batchSize) || batchSize <= 0) {
-      return res.status(400).json({ message: 'batchSize must be a positive integer' });
+      return res
+        .status(400)
+        .json({ message: "batchSize must be a positive integer" });
     }
 
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
     const rangeStart = startIndex;
     const rangeEnd = startIndex + batchSize - 1;
 
-    // Fetch full range
+    // Fetch full range of sentences by index
     const sentencesInRange = await Sentence.find(
       { index: { $gte: rangeStart, $lte: rangeEnd } },
-      '_id index assignedTo'
+      "_id index assignedTo"
     ).lean();
 
     if (sentencesInRange.length === 0) {
       return res.status(404).json({
-        message: `No sentences exist in index range ${rangeStart}–${rangeEnd}.`
+        message: `No sentences exist in index range ${rangeStart}–${rangeEnd}.`,
       });
     }
 
-    // classify
     const isSameId = (a, b) => String(a) === String(b);
 
-    const unassigned = sentencesInRange.filter(s => !s.assignedTo);
-    const assignedToUser = sentencesInRange.filter(
-      s => s.assignedTo && isSameId(s.assignedTo, userId)
-    );
-    const assignedToOthers = sentencesInRange.filter(
-      s => s.assignedTo && !isSameId(s.assignedTo, userId)
+    // Sentences not yet assigned to anyone
+    const unassigned = sentencesInRange.filter(
+      (s) => !s.assignedTo || s.assignedTo.length === 0
     );
 
-    // double-assignment: if user already has this batch recorded
+    // Sentences already assigned to this user
+    const assignedToUser = sentencesInRange.filter(
+      (s) =>
+        Array.isArray(s.assignedTo) &&
+        s.assignedTo.some((id) => isSameId(id, userId))
+    );
+
+    // Sentences assigned to others (but not this user)
+    const assignedToOthers = sentencesInRange.filter(
+      (s) =>
+        Array.isArray(s.assignedTo) &&
+        s.assignedTo.length > 0 &&
+        !s.assignedTo.some((id) => isSameId(id, userId))
+    );
+
+    // Sentences not yet assigned to *this* user
+    const notYetAssignedToUser = sentencesInRange.filter(
+      (s) =>
+        !Array.isArray(s.assignedTo) ||
+        !s.assignedTo.some((id) => isSameId(id, userId))
+    );
+
     const existingAssignment = user.assignments.find(
-      a => a.batchStart === rangeStart && a.batchEnd === rangeEnd
+      (a) => a.batchStart === rangeStart && a.batchEnd === rangeEnd
     );
 
     if (existingAssignment) {
-      // if some data points are missing, fill them
-      if (unassigned.length > 0) {
+      if (notYetAssignedToUser.length > 0) {
         await Sentence.updateMany(
-          { _id: { $in: unassigned.map(s => s._id) } },
-          { $set: { assignedTo: userId } }
+          { _id: { $in: notYetAssignedToUser.map((s) => s._id) } },
+          { $addToSet: { assignedTo: userId } }
         );
 
-        // optional: refresh user.assignedIndices
         await User.findByIdAndUpdate(userId, {
-          $addToSet: { assignedIndices: { $each: unassigned.map(s => s._id) } }
+          $addToSet: {
+            assignedIndices: { $each: notYetAssignedToUser.map((s) => s._id) },
+          },
         });
 
         return res.status(200).json({
-          message: `Gap fill complete. ${unassigned.length} missing sentences assigned.`,
+          message: `Gap fill complete. ${notYetAssignedToUser.length} missing sentences assigned.`,
           batchStart: rangeStart,
           batchEnd: rangeEnd,
-          newlyAssigned: unassigned.length
+          newlyAssigned: notYetAssignedToUser.length,
         });
       }
 
-      // No missing data → everything already assigned
       return res.status(200).json({
-        message: `This batch (${rangeStart}-${rangeEnd}) is already fully assigned.`,
+        message: `This batch (${rangeStart}-${rangeEnd}) is already fully assigned to this user.`,
         batchStart: rangeStart,
-        batchEnd: rangeEnd
+        batchEnd: rangeEnd,
       });
     }
 
-    // Normal new assignment (not seen before)
-    if (unassigned.length > 0) {
+    // Assign any not-yet-assigned-to-this-user sentences
+    if (notYetAssignedToUser.length > 0) {
       await Sentence.updateMany(
-        { _id: { $in: unassigned.map(s => s._id) } },
-        { $set: { assignedTo: userId } }
+        { _id: { $in: notYetAssignedToUser.map((s) => s._id) } },
+        { $addToSet: { assignedTo: userId } }
       );
 
-      // track sentence IDs
       await User.findByIdAndUpdate(userId, {
-        $addToSet: { assignedIndices: { $each: unassigned.map(s => s._id) } }
+        $addToSet: {
+          assignedIndices: { $each: notYetAssignedToUser.map((s) => s._id) },
+        },
       });
     }
 
-    // Add new assignment record
+    // Add assignment record
     user.assignments.push({
       batchStart: rangeStart,
       batchEnd: rangeEnd,
       batchSize,
       assignedAt: new Date(),
-      completed: false
+      completed: false,
     });
     await user.save();
 
     return res.status(200).json({
-      message: 'Assignment processed.',
+      message: "Assignment processed.",
       batchStart: rangeStart,
       batchEnd: rangeEnd,
-      newlyAssigned: unassigned.length,
+      newlyAssigned: notYetAssignedToUser.length,
       duplicatesAlreadyOwned: assignedToUser.length,
-      conflictsAssignedToOthers: assignedToOthers.length
+      conflictsAssignedToOthers: assignedToOthers.length,
     });
   } catch (err) {
-    console.error('Error in assignDataToUser:', err);
-    return res.status(500).json({ message: 'Server error during assignment' });
+    console.error("Error in assignDataToUser:", err);
+    return res.status(500).json({ message: "Server error during assignment" });
   }
 };
